@@ -162,7 +162,7 @@
 
     var pool = poolOf(state.units);
     var n = state.size ? Math.min(state.size, pool.length) : pool.length;
-    html += '<button class="btn btn-primary" data-act="start">开始练习 · ' + n + " 题</button>";
+    html += '<button class="btn btn-primary" id="startBtn" data-act="start">开始练习 · ' + n + " 题</button>";
     html += "</div>";
 
     /* 快捷入口 */
@@ -276,6 +276,37 @@
     if (!units.length) return DB.questions.slice();
     return DB.questions.filter(function (q) { return units.indexOf(q.u) >= 0; });
   }
+
+  /* 局部刷新练习设置，避免整页重绘造成闪烁 */
+  function syncSetup() {
+    if (state.view !== "home") return;
+    var chips = document.querySelectorAll("#unitChips .chip");
+    for (var i = 0; i < chips.length; i++) {
+      var v = Number(chips[i].getAttribute("data-unit"));
+      var on = v === -1 ? state.units.length === 0 : state.units.indexOf(v) >= 0;
+      chips[i].setAttribute("aria-pressed", on ? "true" : "false");
+    }
+    var scope = document.getElementById("scopeVal");
+    if (scope) scope.textContent = state.units.length ? state.units.length + " 个单元" : "全部单元";
+
+    var sizes = document.querySelectorAll('[data-act="size"]');
+    for (var j = 0; j < sizes.length; j++) {
+      sizes[j].setAttribute("aria-pressed", Number(sizes[j].getAttribute("data-size")) === state.size ? "true" : "false");
+    }
+    var orders = document.querySelectorAll('[data-act="order"]');
+    for (var m = 0; m < orders.length; m++) {
+      var want = orders[m].getAttribute("data-order") === "1";
+      orders[m].setAttribute("aria-pressed", want === state.shuffle ? "true" : "false");
+    }
+
+    var pool = poolOf(state.units);
+    var n = state.size ? Math.min(state.size, pool.length) : pool.length;
+    var btn = document.getElementById("startBtn");
+    if (btn) {
+      btn.textContent = "开始练习 · " + n + " 题";
+      btn.disabled = n === 0;
+    }
+  }
   function startSession(ids, title) {
     if (!ids.length) { toast("没有可用题目"); return; }
     state.session = {
@@ -321,7 +352,9 @@
       + "</div>";
     h += '<div class="pbar"><i style="width:' + pct(s.i, s.ids.length) + '%"></i></div>';
 
-    h += '<div class="card qcard fade">';
+    var isNewQ = state._qid !== q.id;
+    state._qid = q.id;
+    h += '<div class="card qcard' + (isNewQ ? " fade" : "") + '">';
     h += '<div class="qhead"><span class="badge unit">' + esc(unitName(q.u)) + "</span>"
       + (q.k && q.k !== (UNIT[q.u] || {}).name ? '<span class="badge">' + esc(q.k) + "</span>" : "")
       + '<span class="badge">' + esc(q.t) + "</span></div>";
@@ -514,7 +547,7 @@
       var cur = document.documentElement.getAttribute("data-theme");
       store.theme = cur === "dark" ? "light" : "dark";
       applyTheme(); save();
-      render();
+      el.innerHTML = store.theme === "dark" ? ICON.sun : ICON.moon;
       return;
     }
     if (act === "home") { state.view = "home"; state.session = null; render(); window.scrollTo(0, 0); return; }
@@ -528,11 +561,11 @@
         if (i >= 0) state.units.splice(i, 1);
         else state.units.push(v);
       }
-      render();
+      syncSetup();
       return;
     }
-    if (act === "size") { state.size = Number(el.getAttribute("data-size")); render(); return; }
-    if (act === "order") { state.shuffle = el.getAttribute("data-order") === "1"; render(); return; }
+    if (act === "size") { state.size = Number(el.getAttribute("data-size")); syncSetup(); return; }
+    if (act === "order") { state.shuffle = el.getAttribute("data-order") === "1"; syncSetup(); return; }
     if (act === "start") {
       if (state.view === "result") { state.units = []; state.size = 20; }
       startFromSetup(); return;
@@ -545,10 +578,17 @@
     if (act === "wrong") { state.view = "list"; state.listType = "wrong"; render(); window.scrollTo(0, 0); return; }
     if (act === "fav") {
       var fid = Number(el.getAttribute("data-id"));
-      if (store.fav[fid]) delete store.fav[fid]; else store.fav[fid] = 1;
+      var wasFav = !!store.fav[fid];
+      if (wasFav) delete store.fav[fid]; else store.fav[fid] = 1;
       save();
-      toast(store.fav[fid] ? "已收藏" : "已取消收藏");
-      render();
+      toast(wasFav ? "已取消收藏" : "已收藏");
+      if (el.classList.contains("icon-btn")) {
+        el.innerHTML = wasFav ? ICON.star : ICON.starOn;
+        el.style.color = wasFav ? "" : "var(--gold)";
+        el.style.borderColor = wasFav ? "" : "var(--gold)";
+      } else {
+        render();
+      }
       return;
     }
     if (act === "stat") { toast("累计作答 " + store.stat.seen + " 题，正确 " + store.stat.right + " 题"); return; }
