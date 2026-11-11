@@ -188,18 +188,28 @@ def build_multi(H, limit=120):
         def grams(s):
             return {s[i:i + 2] for i in range(len(s) - 1)}
 
+        def subseq(a, b):
+            """a 是否为 b 的子序列（允许跳字），用于识别「补肾阳/补肾助阳」这类同义缩写"""
+            it = iter(b)
+            return all(ch in it for ch in a)
+
         def too_close(name):
-            # 干扰项的功效不能与目标功效有 2 字以上重合，避免「补肾阳/补肾助阳」这种争议
             for tk in H[name]["f"]:
                 if tk == term:
                     return True
-                if grams(term) & grams(tk):
+                if min(len(tk), len(term)) >= 3 and (subseq(tk, term) or subseq(term, tk)):
                     return True
             return False
 
+        def shares_token(name):
+            return any(set(H[name]["f"]) & set(H[r]["f"]) for r in right)
+
         pool = [n for n in by_cat.get(cat, []) if n not in right and term not in H[n]["f"] and not too_close(n)]
         if len(pool) < 2:
-            pool = [n for n in H if n not in right and term not in H[n]["f"] and not too_close(n)]
+            # 同类药不够，就先找与正确答案有共同功效词的药，再退到全库抽样
+            near = [n for n in H if n not in right and term not in H[n]["f"]
+                    and not too_close(n) and shares_token(n)]
+            pool = (near or [n for n in H if n not in right and term not in H[n]["f"] and not too_close(n)])[seed % 7:]
         wrong = pool[: 5 - len(right)]
         opts = right + wrong
         seed = len(out) * 7 + len(term)
