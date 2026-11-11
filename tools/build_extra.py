@@ -169,6 +169,10 @@ def build_cases(data, H):
 
 def build_multi(H, limit=120):
     """按单个功效词生成多选题，干扰项优先同类药。"""
+    def has(name, term):
+        """药是否具备某功效：功效词里包含该词即算（如「活血行气」包含「活血」）"""
+        return any(term in tk for tk in H[name]["f"])
+
     by_term = collections.defaultdict(list)
     for name, h in H.items():
         for t in h["f"]:
@@ -180,9 +184,14 @@ def build_multi(H, limit=120):
 
     out = []
     for term, names in sorted(by_term.items(), key=lambda kv: -len(kv[1])):
-        if len(names) < 2:
+        # 包含该功效词的药都算正确答案，优先取与该词完全一致的那几味
+        pool_right = [n for n in H if has(n, term)]
+        exact = [n for n in pool_right if term in H[n]["f"]]
+        others = [n for n in pool_right if n not in exact]
+        right = (exact[:2] + others[:1]) or exact[:3]
+        right = list(dict.fromkeys(right))
+        if len(right) < 2:
             continue
-        right = names[:3]
         cat = H[right[0]]["c"]
 
         def grams(s):
@@ -204,14 +213,27 @@ def build_multi(H, limit=120):
         def shares_token(name):
             return any(set(H[name]["f"]) & set(H[r]["f"]) for r in right)
 
-        pool = [n for n in by_cat.get(cat, []) if n not in right and term not in H[n]["f"] and not too_close(n)]
+        pool = [n for n in by_cat.get(cat, []) if n not in right and not has(n, term) and not too_close(n)]
         if len(pool) < 2:
             # 同类药不够，就先找与正确答案有共同功效词的药，再退到全库抽样
-            near = [n for n in H if n not in right and term not in H[n]["f"]
+            near = [n for n in H if n not in right and not has(n, term)
                     and not too_close(n) and shares_token(n)]
-            pool = (near or [n for n in H if n not in right and term not in H[n]["f"] and not too_close(n)])[seed % 7:]
+            pool = (near or [n for n in H if n not in right and not has(n, term) and not too_close(n)])[seed % 7:]
         wrong = pool[: 5 - len(right)]
+        # 复合功效词（如「镇惊安神」）若某味药的两个片段分别出现在不同功效词里，判定会有争议，直接跳过
+        ambiguous = False
+        if len(term) == 4:
+            a, b = term[:2], term[2:]
+            for n in wrong:
+                toks = H[n]["f"]
+                if any(a in x for x in toks) and any(b in x for x in toks):
+                    ambiguous = True
+                    break
+        if ambiguous:
+            continue
         opts = right + wrong
+        if len(opts) < 4:
+            continue
         seed = len(out) * 7 + len(term)
         opts = opts[seed % len(opts):] + opts[: seed % len(opts)]   # 简单打散
         letters = [chr(65 + i) for i in range(len(opts))]
