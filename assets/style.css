@@ -1,4 +1,4 @@
-/* 中药学题库 · 样式表 */
+﻿/* 中药学题库 · 样式表 */
 :root{
   --bg:#f4f1e8;
   --bg-grad:#efe9db;
@@ -65,8 +65,8 @@ body::before{
 button{font-family:inherit;font-size:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
 a{color:var(--brand);text-decoration:none}
 
-.app{max-width:760px;margin:0 auto;padding:0 18px 56px}
-@media (max-width:420px){.app{padding:0 14px 48px}}
+.app{max-width:760px;margin:0 auto;padding:env(safe-area-inset-top,0px) 18px 56px}
+@media (max-width:420px){.app{padding:env(safe-area-inset-top,0px) 14px 48px}}
 
 /* ---------- 顶栏 ---------- */
 .topbar{
@@ -382,3 +382,22 @@ html[data-theme="dark"] .ring{background:conic-gradient(var(--brand) calc(var(--
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
 }
+
+/* 页面内确认弹层 */
+.mask{
+  position:fixed;inset:0;z-index:60;display:grid;place-items:center;
+  background:rgba(22,24,21,.42);padding:22px;
+  -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);
+  animation:fade .16s ease both;
+}
+.mask[hidden]{display:none}
+.dialog{
+  width:100%;max-width:330px;
+  background:var(--surface);border:1px solid var(--line);
+  border-radius:16px;padding:20px 18px 16px;
+  box-shadow:0 26px 60px -22px rgba(0,0,0,.5);
+}
+.dialog h3{margin:0 0 6px;font-family:var(--serif);font-size:17px;font-weight:600;letter-spacing:.02em}
+.dialog p{margin:0 0 16px;font-size:13.5px;line-height:1.6;color:var(--ink-2)}
+.dialog-actions{display:flex;gap:10px}
+.dialog-actions .btn{flex:1;padding:11px 12px;font-size:14.5px;width:auto}

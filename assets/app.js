@@ -154,6 +154,42 @@
     clearTimeout(toastEl._t);
     toastEl._t = setTimeout(function () { toastEl.classList.remove("on"); }, 1800);
   }
+
+  /* 页面内确认弹层（替代 window.confirm：手机浏览器/微信 WebView 会屏蔽原生弹窗） */
+  var dialogEl = null, dialogOk = null;
+  function askConfirm(title, desc, onOk) {
+    if (!dialogEl) {
+      dialogEl = document.createElement("div");
+      dialogEl.className = "mask";
+      dialogEl.setAttribute("hidden", "");
+      document.body.appendChild(dialogEl);
+      dialogEl.addEventListener("click", function (e) {
+        var b = e.target.closest("[data-dlg]");
+        if (!b) {
+          if (e.target === dialogEl) closeDialog(false);
+          return;
+        }
+        closeDialog(b.getAttribute("data-dlg") === "ok");
+      });
+    }
+    dialogOk = onOk;
+    dialogEl.innerHTML = '<div class="dialog" role="dialog" aria-modal="true">'
+      + "<h3>" + esc(title) + "</h3>"
+      + (desc ? "<p>" + esc(desc) + "</p>" : "")
+      + '<div class="dialog-actions">'
+      + '<button class="btn" data-dlg="cancel">取消</button>'
+      + '<button class="btn btn-primary" data-dlg="ok">确定</button>'
+      + "</div></div>";
+    dialogEl.removeAttribute("hidden");
+  }
+  function closeDialog(ok) {
+    if (!dialogEl) return;
+    dialogEl.setAttribute("hidden", "");
+    dialogEl.innerHTML = "";
+    var fn = dialogOk;
+    dialogOk = null;
+    if (ok && fn) fn();
+  }
   function unitName(id) {
     if (id === 0) return "综合练习";
     return UNIT[id] ? "第" + cn(id) + "单元 · " + UNIT[id].name : "未分类";
@@ -285,7 +321,7 @@
       + "题库整理自《中药学》单元练习表，已合并去重，共 " + DB.total + " 题。"
       + "题目文字可能存在个别录入误差，以教材为准。<br>"
       + "进度保存在本机浏览器，换设备或清理缓存会丢失。<br>"
-      + '<span style="opacity:.7">版本 v6 · 2026-11-11</span>'
+      + '<span style="opacity:.7">版本 v7 · 2026-11-11</span>'
       + "</div>";
 
     app.innerHTML = html;
@@ -689,13 +725,52 @@
   }
 
   /* ---------------- 渲染 ---------------- */
-  function render() {
+  function render(silent) {
     if (state.view === "home") viewHome();
     else if (state.view === "quiz") viewQuiz();
     else if (state.view === "result") viewResult();
     else if (state.view === "list") viewList(state.listType);
     else if (state.view === "detail") viewDetail(state.detailId);
+    if (!silent) syncHistory(state.view);
   }
+
+  /* ---------------- 浏览器/系统返回键 ---------------- */
+  // 维护一份「视图栈」，让页内返回与系统返回键行为一致，也不会产生重复历史条目
+  var suppressSync = false;
+  var vstack = ["home"];
+  function syncHistory(view) {
+    if (suppressSync) return;
+    var top = vstack[vstack.length - 1];
+    if (view === top) return;
+    if (view === "result") {                       // 结果页替换当前条目，返回时直接回上一屏
+      vstack[vstack.length - 1] = "result";
+      try { history.replaceState({ v: "result" }, ""); } catch (e) {}
+      return;
+    }
+    if (view === vstack[vstack.length - 2]) {      // 回到上一屏：退掉一条历史
+      vstack.pop();
+      try { history.back(); } catch (e) {}
+      return;
+    }
+    vstack.push(view);
+    try { history.pushState({ v: view }, ""); } catch (e) {}
+  }
+  window.addEventListener("popstate", function (e) {
+    var v = (e.state && e.state.v) || "home";
+    var i = vstack.indexOf(v);
+    if (i > 0) vstack.length = i + 1;
+    else { vstack = ["home"]; v = "home"; }
+    suppressSync = true;
+    if (v === "quiz" && state.session) state.view = "quiz";
+    else if (v === "detail" && state.detailId) state.view = "detail";
+    else if (v === "list" && state.listType) state.view = "list";
+    else if (v === "result") state.view = "result";
+    else { state.view = "home"; state.session = null; }
+    render(true);
+    suppressSync = false;
+    window.scrollTo(0, 0);
+  });
+  try { history.replaceState({ v: "home" }, ""); } catch (e) {}
 
   /* ---------------- 事件 ---------------- */
   app.addEventListener("click", function (e) {
@@ -776,7 +851,15 @@
     if (act === "prev") { go(-1); return; }
     if (act === "finish") { state.view = "result"; render(); window.scrollTo(0, 0); return; }
     if (act === "quit") {
-      if (Object.keys(state.session.answers).length && !window.confirm("退出本次练习？已作答的记录会保留在统计中。")) return;
+      var answeredN = state.session ? Object.keys(state.session.answers).length : 0;
+      if (answeredN) {
+        // 不用 window.confirm：部分手机浏览器/内嵌 WebView 会屏蔽原生弹窗，
+        // 表现就是「返回键点不动」。这里改用页面内弹层。
+        askConfirm("退出本次练习？", "已答的 " + answeredN + " 题会保留在统计与错题本里", function () {
+          state.session = null; state.view = "home"; render(); window.scrollTo(0, 0);
+        });
+        return;
+      }
       state.session = null; state.view = "home"; render(); window.scrollTo(0, 0); return;
     }
     if (act === "redo") {
@@ -798,9 +881,11 @@
     }
     if (act === "clearList") {
       var t3 = el.getAttribute("data-type");
-      if (!window.confirm(t3 === "wrong" ? "清空全部错题？" : "清空全部收藏？")) return;
-      if (t3 === "wrong") store.wrong = {}; else store.fav = {};
-      save(); render(); toast("已清空"); return;
+      askConfirm(t3 === "wrong" ? "清空全部错题？" : "清空全部收藏？", "清空后无法恢复", function () {
+        if (t3 === "wrong") store.wrong = {}; else store.fav = {};
+        save(); render(); toast("已清空");
+      });
+      return;
     }
   });
 
