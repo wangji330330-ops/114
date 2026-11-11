@@ -15,6 +15,22 @@
   var UNIT = {};
   DB.units.forEach(function (u) { UNIT[u.id] = u; });
 
+  /* 扩展题型：名词解释 / 病例问答 / 多选题 / 问答题 */
+  var EXTRA = window.QB_EXTRA || {};
+  var SPECIAL = {
+    term: { label: "名词解释", list: EXTRA.terms || null },
+    case: { label: "病例问答", list: EXTRA.cases || null },
+    multi: { label: "多选题", list: EXTRA.multi || null },
+    essay: { label: "问答题", list: EXTRA.essay || null }
+  };
+  var SPECIAL_NO = { term: "释", case: "案", multi: "多", essay: "问" };
+  var SPECIAL_DESC = {
+    term: "总论概念 · 各论分类",
+    case: "病例题改写成问答",
+    multi: "同功效药物辨析",
+    essay: "性味归经与功效"
+  };
+
   /* ---------------- 药物小词典（教材数据，题库兜底） ----------------
      DB.drugs: { 药名: [功效串, 附加信息(性味归经 或 主治)] }
      DB.alias: { 别名: 规范名 } */
@@ -178,7 +194,8 @@
     session: null,
     listType: null,
     search: "",
-    detailId: null
+    detailId: null,
+    special: null
   };
 
   /* ---------------- 工具 ---------------- */
@@ -290,7 +307,7 @@
     html += '<section class="hero">'
       + '<div class="hero-kicker">逐题精练 · 自动判分</div>'
       + '<h1>中药学<em>题库</em></h1>'
-      + '<p>' + DB.total + ' 道选择题，覆盖总论与各论 ' + unitN + ' 个单元。点选项即时判对错，错题自动归档。</p>'
+      + '<p>' + DB.total + ' 道选择题（覆盖总论与各论 ' + unitN + ' 个单元），另有名词解释、病例问答、多选题与问答题。</p>'
       + '<div class="hero-stats">'
       + '<div class="stat"><b>' + DB.total + '</b><span>题目总数</span></div>'
       + '<div class="stat"><b>' + unitN + '</b><span>单元</span></div>'
@@ -333,6 +350,28 @@
     html += tile("看进度", seen ? rate + "%" : "0%", "stat", "累计 " + seen + " 题");
     html += "</div>";
 
+    /* 专项练习：名词解释 / 病例问答 / 多选题 / 问答题 */
+    var hasSpecial = ["term", "case", "multi", "essay"].some(function (k) {
+      return SPECIAL[k].list && SPECIAL[k].list.length;
+    });
+    if (hasSpecial) {
+      html += '<div class="section-title"><h2>其他题型</h2><div class="line"></div><span class="hint">教材总论 + 题库改写</span></div>';
+      html += '<div class="unit-grid">';
+      ["term", "case", "multi", "essay"].forEach(function (k) {
+        var s = SPECIAL[k];
+        if (!s.list || !s.list.length) return;
+        html += '<button class="unit" data-act="special" data-kind="' + k + '">'
+          + '<span class="unit-no">' + SPECIAL_NO[k] + "</span>"
+          + '<span class="unit-main">'
+          + '<span class="unit-name">' + s.label + "</span>"
+          + '<span class="unit-desc">' + SPECIAL_DESC[k] + "</span>"
+          + "</span>"
+          + '<span class="unit-cnt">' + s.list.length + " 题</span>"
+          + "</button>";
+      });
+      html += "</div>";
+    }
+
     /* 搜索 */
     html += '<div class="section-title"><h2>查题</h2><div class="line"></div><span class="hint">题干 / 选项 / 知识点</span></div>';
     html += '<div class="search">' + ICON.search + '<input id="searchInput" type="search" placeholder="输入关键词，如：麻黄、十九畏、归经" value="' + esc(state.search) + '" autocomplete="off"></div>';
@@ -360,7 +399,7 @@
       + "题库整理自《中药学》单元练习表，已合并去重，共 " + DB.total + " 题。选项注解用教材药物数据（功效/性味/归经）标注。"
       + "题目文字可能存在个别录入误差，以教材为准。<br>"
       + "进度保存在本机浏览器，换设备或清理缓存会丢失。<br>"
-      + '<span style="opacity:.7">版本 v8 · 2026-11-11</span>'
+      + '<span style="opacity:.7">版本 v9 · 2026-11-12</span>'
       + "</div>";
 
     app.innerHTML = html;
@@ -755,6 +794,170 @@
     app.innerHTML = h;
   }
 
+  /* ---------------- 视图：专项练习（名词解释 / 病例问答 / 多选题 / 问答题） ---------------- */
+  function startSpecial(kind) {
+    var s = SPECIAL[kind];
+    if (!s || !s.list || !s.list.length) { toast("暂无可练习内容"); return; }
+    state.special = { kind: kind, list: shuffle(s.list.slice()), i: 0, revealed: false, picked: [], done: 0, right: 0 };
+    state.view = "special";
+    render();
+    window.scrollTo(0, 0);
+  }
+
+  function answerHtml(kind, item) {
+    if (kind === "term") {
+      return '<div class="answer-label">解释</div><div class="term-def">' + esc(item.d) + "</div>";
+    }
+    if (kind === "case") {
+      return '<div class="answer-label">参考答案</div><div class="term-def"><b>' + esc(item.a) + "</b>"
+        + (item.x ? '<span class="note-prop">' + esc(item.x) + "</span>" : "") + "</div>";
+    }
+    return '<div class="answer-label">参考答案</div><div class="term-def">' + esc(item.a) + "</div>";
+  }
+
+  function specialMeta(sp) {
+    return '<div class="qmeta">' + SPECIAL[sp.kind].label + "　<b>" + (sp.i + 1) + "</b> / " + sp.list.length
+      + (sp.kind === "multi" && sp.done ? " · 已对 " + sp.right : "") + "</div>";
+  }
+
+  function viewSpecial() {
+    var sp = state.special;
+    if (!sp) { state.view = "home"; return viewHome(); }
+    if (sp.i >= sp.list.length) return viewSpecialDone();
+    var item = sp.list[sp.i];
+
+    var h = '<div class="quiz">';
+    h += '<div class="qtop"><button class="icon-btn" data-act="specialHome" aria-label="返回">' + ICON.back + "</button>"
+      + specialMeta(sp) + '<span style="width:38px"></span></div>';
+    h += '<div class="pbar"><i style="width:' + pct(sp.i, sp.list.length) + '%"></i></div>';
+
+    if (sp.kind === "multi") {
+      h += '<div class="card qcard fade">';
+      h += '<div class="qhead"><span class="badge unit">多选题</span><span class="badge">可多选</span></div>';
+      h += '<h2 class="stem">' + esc(item.q) + "</h2>";
+      h += '<div class="options">';
+      item.o.forEach(function (text, idx) {
+        var L = String.fromCharCode(65 + idx);
+        var picked = sp.picked.indexOf(L) >= 0;
+        h += '<button class="opt" data-act="mpick" data-letter="' + L + '" data-state="' + (picked ? "right" : "") + '">'
+          + '<span class="opt-letter">' + L + "</span>"
+          + '<span class="opt-body"><span class="opt-text">' + esc(text) + "</span></span></button>";
+      });
+      h += "</div>";
+      h += '<div class="feedback" id="fb">' + (sp.revealed ? "" : "选出所有符合的药物后点「提交」") + "</div>";
+      h += "</div>";
+      h += '<div class="qfoot"><button class="btn" data-act="specialPrev"' + (sp.i === 0 ? " disabled" : "") + ">上一题</button>";
+      h += '<button class="btn btn-primary" id="specialBtn" data-act="' + (sp.revealed ? "specialNext" : "msubmit") + '">'
+        + (sp.revealed ? (sp.i >= sp.list.length - 1 ? "完成" : "下一题") : "提交") + "</button></div>";
+      h += "</div>";
+      app.innerHTML = h;
+      return;
+    }
+
+    // 名词解释 / 病例问答 / 问答题：先想，再看答案
+    h += '<div class="card qcard fade">';
+    var badge = SPECIAL[sp.kind].label + (item.g ? " · " + item.g : "");
+    h += '<div class="qhead"><span class="badge unit">' + esc(badge) + "</span></div>";
+    if (sp.kind === "case") {
+      h += '<div class="case-body">' + esc(item.q) + "</div>";
+      h += '<div class="case-ask">问：' + esc(item.ask) + "</div>";
+    } else {
+      h += '<h2 class="stem">' + esc(sp.kind === "term" ? item.n : item.q) + "</h2>";
+      if (sp.kind === "term") h += '<div class="term-hint">先在心里解释一遍，再点下面看答案</div>';
+    }
+    h += '<div class="special-answer" id="specialAnswer" hidden></div>';
+    h += "</div>";
+    h += '<div class="qfoot"><button class="btn" data-act="specialPrev"' + (sp.i === 0 ? " disabled" : "") + ">上一题</button>";
+    h += '<button class="btn btn-primary" id="specialBtn" data-act="' + (sp.revealed ? "specialNext" : "specialReveal") + '">'
+      + (sp.revealed ? (sp.i >= sp.list.length - 1 ? "完成" : "下一题") : "看答案") + "</button></div>";
+    h += "</div>";
+    app.innerHTML = h;
+    if (sp.revealed) {
+      var box = document.getElementById("specialAnswer");
+      if (box) { box.innerHTML = answerHtml(sp.kind, item); box.removeAttribute("hidden"); }
+    }
+  }
+
+  function viewSpecialDone() {
+    var sp = state.special;
+    var rate = pct(sp.right, sp.done);
+    var h = topbar("result");
+    h += '<section class="result">';
+    h += '<div class="ring" style="--p:' + (sp.kind === "multi" ? rate : 100) + '"><div class="ring-in"><b>'
+      + (sp.kind === "multi" ? rate : sp.list.length) + "</b><span>"
+      + (sp.kind === "multi" ? "正确率" : "已完成") + "</span></div></div>";
+    h += "<h2>" + SPECIAL[sp.kind].label + " 完成</h2>";
+    h += '<p class="sub">' + (sp.kind === "multi" ? "答对 " + sp.right + " / " + sp.done + " 题" : "共 " + sp.list.length + " 题") + "</p>";
+    h += '<div class="result-actions">';
+    h += '<button class="btn btn-primary" data-act="specialRestart" data-kind="' + sp.kind + '">再来一遍</button>';
+    h += '<button class="btn" data-act="specialHome">回到首页</button>';
+    h += "</div></section>";
+    app.innerHTML = h;
+  }
+
+  function revealSpecial() {
+    var sp = state.special;
+    if (!sp || sp.revealed) return;
+    var item = sp.list[sp.i];
+    var box = document.getElementById("specialAnswer");
+    var btn = document.getElementById("specialBtn");
+    if (!box || !btn) return;
+    box.innerHTML = answerHtml(sp.kind, item);
+    box.removeAttribute("hidden");
+    var hint = document.querySelector(".term-hint");
+    if (hint) hint.style.display = "none";
+    sp.revealed = true;
+    btn.setAttribute("data-act", "specialNext");
+    btn.textContent = sp.i >= sp.list.length - 1 ? "完成" : "下一题";
+  }
+
+  function msubmit() {
+    var sp = state.special;
+    if (!sp || !sp.picked.length) { toast("请先选择选项"); return; }
+    var item = sp.list[sp.i];
+    var ok = sameSet(sp.picked, item.a);
+    sp.done++;
+    if (ok) sp.right++;
+    var notes = notesFor({ o: item.o, q: item.q });
+    var opts = document.querySelectorAll(".options .opt");
+    for (var i = 0; i < opts.length; i++) {
+      var L = opts[i].getAttribute("data-letter");
+      opts[i].setAttribute("data-state",
+        item.a.indexOf(L) >= 0 ? "right" : (sp.picked.indexOf(L) >= 0 ? "wrong" : "dim"));
+      opts[i].disabled = true;
+      var body = opts[i].querySelector(".opt-body");
+      if (body && notes[i] && notes[i].eff) body.appendChild(noteNode(notes[i]));
+    }
+    var fb = document.getElementById("fb");
+    if (fb) {
+      fb.className = "feedback" + (ok ? "" : " bad");
+      fb.innerHTML = (ok ? '<b class="ok">回答正确</b>' : '<b class="no">回答错误</b>')
+        + "　正确答案：<b>" + item.a.join("") + "</b>";
+    }
+    sp.revealed = true;
+    var btn = document.getElementById("specialBtn");
+    if (btn) {
+      btn.setAttribute("data-act", "specialNext");
+      btn.textContent = sp.i >= sp.list.length - 1 ? "完成" : "下一题";
+    }
+    var meta = document.querySelector(".qmeta");
+    if (meta) meta.innerHTML = specialMeta(sp).replace(/^<div class="qmeta">|<\/div>$/g, "");
+  }
+
+  function specialStep(d) {
+    var sp = state.special;
+    if (!sp) return;
+    if (d > 0 && !sp.revealed) { revealSpecial(); return; }
+    var n = sp.i + d;
+    if (n < 0) return;
+    if (n >= sp.list.length) { render(); window.scrollTo(0, 0); return; }
+    sp.i = n;
+    sp.revealed = false;
+    sp.picked = [];
+    render();
+    window.scrollTo(0, 0);
+  }
+
   /* ---------------- 渲染 ---------------- */
   function render(silent) {
     if (state.view === "home") viewHome();
@@ -762,6 +965,7 @@
     else if (state.view === "result") viewResult();
     else if (state.view === "list") viewList(state.listType);
     else if (state.view === "detail") viewDetail(state.detailId);
+    else if (state.view === "special") viewSpecial();
     if (!silent) syncHistory(state.view);
   }
 
@@ -795,6 +999,7 @@
     if (v === "quiz" && state.session) state.view = "quiz";
     else if (v === "detail" && state.detailId) state.view = "detail";
     else if (v === "list" && state.listType) state.view = "list";
+    else if (v === "special" && state.special) state.view = "special";
     else if (v === "result") state.view = "result";
     else { state.view = "home"; state.session = null; }
     render(true);
@@ -876,6 +1081,25 @@
     if (act === "practiceOne") {
       startSession([Number(el.getAttribute("data-id"))], "单题练习"); return;
     }
+    /* 专项练习 */
+    if (act === "special") { startSpecial(el.getAttribute("data-kind")); return; }
+    if (act === "specialHome") {
+      state.special = null; state.view = "home"; render(); window.scrollTo(0, 0); return;
+    }
+    if (act === "specialReveal") { revealSpecial(); return; }
+    if (act === "specialNext") { specialStep(1); return; }
+    if (act === "specialPrev") { specialStep(-1); return; }
+    if (act === "specialRestart") { startSpecial(el.getAttribute("data-kind")); return; }
+    if (act === "mpick") {
+      var sp0 = state.special;
+      if (!sp0 || sp0.revealed) return;
+      var L0 = el.getAttribute("data-letter");
+      var k0 = sp0.picked.indexOf(L0);
+      if (k0 >= 0) sp0.picked.splice(k0, 1); else sp0.picked.push(L0);
+      el.setAttribute("data-state", k0 >= 0 ? "" : "right");
+      return;
+    }
+    if (act === "msubmit") { msubmit(); return; }
     if (act === "pick") { pick(el.getAttribute("data-letter")); return; }
     if (act === "submit") { submitMulti(); return; }
     if (act === "next") { go(1); return; }

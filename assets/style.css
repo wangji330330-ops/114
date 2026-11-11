@@ -403,3 +403,15 @@ html[data-theme="dark"] .ring{background:conic-gradient(var(--brand) calc(var(--
 .dialog p{margin:0 0 16px;font-size:13.5px;line-height:1.6;color:var(--ink-2)}
 .dialog-actions{display:flex;gap:10px}
 .dialog-actions .btn{flex:1;padding:11px 12px;font-size:14.5px;width:auto}
+/* 专项练习：名词解释 / 病例问答 / 问答题 */
+.case-body{font-size:15.5px;line-height:1.85;color:var(--ink);margin-bottom:10px}
+.case-ask{font-size:15px;line-height:1.7;font-weight:600;color:var(--brand);padding-left:2px}
+.term-hint{font-size:12.5px;color:var(--muted);margin-top:-6px}
+.special-answer{
+  margin-top:16px;padding-top:14px;border-top:1px dashed var(--line);
+}
+.answer-label{
+  font-size:11.5px;letter-spacing:.14em;color:var(--gold);margin-bottom:7px;
+}
+.term-def{font-size:15px;line-height:1.85;color:var(--ink)}
+.term-def b{color:var(--brand)}
