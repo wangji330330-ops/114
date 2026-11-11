@@ -329,6 +329,16 @@
   }
 
   /* ---------------- 视图：答题 ---------------- */
+  function quizMeta() {
+    var s = state.session;
+    var done = Object.keys(s.answers).length;
+    var right = 0;
+    for (var id in s.answers) {
+      if (sameSet(s.answers[id], BY_ID[id].a)) right++;
+    }
+    return "第 <b>" + (s.i + 1) + "</b> / " + s.ids.length + " 题" + (done ? " · 已对 " + right : "");
+  }
+
   function viewQuiz() {
     var s = state.session;
     if (!s) { state.view = "home"; return viewHome(); }
@@ -337,17 +347,12 @@
     var answered = s.answers[q.id];
     var multi = q.a.length > 1 || q.t === "多选题";
     var isFav = !!store.fav[q.id];
-    var done = Object.keys(s.answers).length;
-    var right = Object.keys(s.answers).filter(function (id) {
-      return sameSet(s.answers[id], BY_ID[id].a);
-    }).length;
 
     var h = "";
     h += '<div class="quiz">';
     h += '<div class="qtop">'
       + '<button class="icon-btn" data-act="quit" aria-label="退出练习">' + ICON.back + "</button>"
-      + '<div class="qmeta">第 <b>' + (s.i + 1) + "</b> / " + s.ids.length + " 题"
-      + (done ? " · 已对 " + right : "") + "</div>"
+      + '<div class="qmeta" id="qmeta">' + quizMeta() + "</div>"
       + '<button class="icon-btn" data-act="fav" data-id="' + q.id + '" aria-label="收藏" style="' + (isFav ? "color:var(--gold);border-color:var(--gold)" : "") + '">' + (isFav ? ICON.starOn : ICON.star) + "</button>"
       + "</div>";
     h += '<div class="pbar"><i style="width:' + pct(s.i, s.ids.length) + '%"></i></div>';
@@ -378,30 +383,72 @@
 
     if (answered) {
       var ok = sameSet(answered, q.a);
-      h += '<div class="feedback' + (ok ? "" : " bad") + '">'
+      h += '<div class="feedback' + (ok ? "" : " bad") + '" id="fb">'
         + (ok ? '<b class="ok">回答正确</b>' : '<b class="no">回答错误</b>')
         + "　正确答案：<b>" + q.a.join("") + ". " + esc(q.o[q.a[0].charCodeAt(0) - 65]) + "</b>"
         + "</div>";
     } else if (multi) {
-      h += '<div class="feedback">多选题，选好后点「提交」</div>';
+      h += '<div class="feedback" id="fb">多选题，选好后点「提交」</div>';
     } else {
-      h += '<div class="feedback" style="color:var(--muted)">点击选项作答</div>';
+      h += '<div class="feedback" id="fb" style="color:var(--muted)">点击选项作答</div>';
     }
     h += "</div>";
 
     h += '<div class="qfoot">';
     h += '<button class="btn" data-act="prev"' + (s.i === 0 ? " disabled" : "") + ">上一题</button>";
     if (!answered && multi) {
-      h += '<button class="btn btn-primary" data-act="submit">提交</button>';
+      h += '<button class="btn btn-primary" data-act="submit" id="qfootBtn">提交</button>';
     } else if (s.i >= s.ids.length - 1 && answered) {
-      h += '<button class="btn btn-primary" data-act="finish">查看结果</button>';
+      h += '<button class="btn btn-primary" data-act="finish" id="qfootBtn">查看结果</button>';
     } else {
-      h += '<button class="btn btn-primary" data-act="next">下一题</button>';
+      h += '<button class="btn btn-primary" data-act="next" id="qfootBtn">下一题</button>';
     }
     h += "</div>";
     h += "</div>";
 
     app.innerHTML = h;
+  }
+
+  /* 作答后就地更新，不重建 DOM（重建会造成一次白闪） */
+  function paintAnswer(q, chosen) {
+    var s = state.session;
+    var ok = sameSet(chosen, q.a);
+    var opts = document.querySelectorAll(".options .opt");
+    for (var i = 0; i < opts.length; i++) {
+      var L = opts[i].getAttribute("data-letter");
+      opts[i].setAttribute("data-state",
+        q.a.indexOf(L) >= 0 ? "right" : (chosen.indexOf(L) >= 0 ? "wrong" : "dim"));
+      opts[i].disabled = true;
+    }
+    var fb = document.getElementById("fb");
+    if (fb) {
+      fb.className = "feedback" + (ok ? "" : " bad");
+      fb.style.color = "";
+      fb.innerHTML = (ok ? '<b class="ok">回答正确</b>' : '<b class="no">回答错误</b>')
+        + "　正确答案：<b>" + q.a.join("") + ". " + esc(q.o[q.a[0].charCodeAt(0) - 65]) + "</b>";
+    }
+    var meta = document.getElementById("qmeta");
+    if (meta) meta.innerHTML = quizMeta();
+    var footBtn = document.getElementById("qfootBtn");
+    if (footBtn) {
+      if (s.i >= s.ids.length - 1) {
+        footBtn.setAttribute("data-act", "finish");
+        footBtn.textContent = "查看结果";
+      } else {
+        footBtn.setAttribute("data-act", "next");
+        footBtn.textContent = "下一题";
+      }
+    }
+  }
+
+  /* 多选题勾选状态就地更新 */
+  function paintPending() {
+    var s = state.session;
+    var opts = document.querySelectorAll(".options .opt");
+    for (var i = 0; i < opts.length; i++) {
+      var L = opts[i].getAttribute("data-letter");
+      opts[i].setAttribute("data-state", s.pending.indexOf(L) >= 0 ? "right" : "");
+    }
   }
 
   /* ---------------- 视图：结果 ---------------- */
@@ -648,8 +695,7 @@
     if (multi) {
       var i = s.pending.indexOf(letter);
       if (i >= 0) s.pending.splice(i, 1); else s.pending.push(letter);
-      if (!s.pending.length) return;
-      render();
+      paintPending();
       return;
     }
     record(q, [letter]);
@@ -659,12 +705,12 @@
     if (!s || !s.pending.length) { toast("请先选择选项"); return; }
     var q = BY_ID[s.ids[s.i]];
     record(q, s.pending.slice());
-    s.pending = [];
   }
   function record(q, chosen) {
     var s = state.session;
     var ok = sameSet(chosen, q.a);
     s.answers[q.id] = chosen;
+    s.pending = [];
     store.stat.seen++;
     if (ok) store.stat.right++;
     var us = store.unit[q.u] || { seen: 0, right: 0 };
@@ -674,7 +720,7 @@
     if (!ok) store.wrong[q.id] = (store.wrong[q.id] || 0) + 1;
     else if (store.wrong[q.id]) { delete store.wrong[q.id]; toast("答对了，已移出错题本"); }
     save();
-    render();
+    paintAnswer(q, chosen);
   }
   function go(d) {
     var s = state.session;
