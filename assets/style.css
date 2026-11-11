@@ -1,4 +1,4 @@
-﻿/* 中药学题库 · 样式表 */
+/* 中药学题库 · 样式表 */
 :root{
   --bg:#f4f1e8;
   --bg-grad:#efe9db;
@@ -282,7 +282,20 @@ html[data-theme="dark"] .badge.unit{background:#1b2c25}
 .opt[data-state="right"] .opt-letter{background:var(--brand);color:#fff;border-color:var(--brand)}
 .opt[data-state="wrong"]{border-color:var(--danger);background:var(--danger-soft)}
 .opt[data-state="wrong"] .opt-letter{background:var(--danger);color:#fff;border-color:var(--danger)}
-.opt[data-state="dim"]{opacity:.5}
+/* 未选中的选项：文字变淡，但注解保持可读，方便对照学习 */
+.opt[data-state="dim"]{border-color:var(--line-2);color:var(--muted)}
+.opt[data-state="dim"] .opt-letter{background:transparent;color:var(--muted);border-color:var(--line)}
+.opt[data-state="dim"] .opt-text{opacity:.62}
+.opt-body{flex:1;min-width:0}
+.opt-text{display:block}
+.opt-note{
+  display:block;margin-top:4px;
+  font-size:11.8px;line-height:1.5;letter-spacing:.01em;
+  color:var(--ink-2);opacity:.9;
+}
+.opt[data-state="right"] .opt-note{color:var(--brand)}
+.opt[data-state="wrong"] .opt-note{color:var(--ink-2)}
+.opt[data-state="dim"] .opt-note{opacity:1;color:var(--muted)}
 .opt[disabled]{cursor:default}
 .opt[disabled]:hover{border-color:var(--line);background:var(--surface)}
 .opt[data-state="right"][disabled]:hover{border-color:var(--brand);background:var(--brand-soft)}

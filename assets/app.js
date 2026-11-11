@@ -15,6 +15,42 @@
   var UNIT = {};
   DB.units.forEach(function (u) { UNIT[u.id] = u; });
 
+  /* ---------------- 药物小词典（由题库自身反推） ---------------- */
+  var DRUGS = DB.drugs || {};
+  var STMT2 = {};   // 功效原句（去标点） -> [药名]
+  Object.keys(DRUGS).forEach(function (name) {
+    var list = DRUGS[name] || [];
+    var eff = list[0] || "";
+    if (!eff) return;
+    var k = flat(eff);
+    (STMT2[k] = STMT2[k] || []).push(name);
+  });
+
+  function flat(s) {
+    return String(s == null ? "" : s).replace(/[\s。．.，,；;、]/g, "");
+  }
+  function clip(s, n) {
+    s = String(s || "");
+    return s.length > n ? s.slice(0, n) + "…" : s;
+  }
+  /* 选项注解：药名 -> 该药的功效/主治；功效原句 -> 这是哪味药的功效 */
+  function optionNote(text) {
+    var raw = String(text == null ? "" : text).trim();
+    if (!raw) return "";
+    var parts = raw.split(/[、，,/／]|和|与/).map(function (s) { return s.trim(); }).filter(Boolean);
+    if (parts.length && parts.every(function (p) { return DRUGS[p]; })) {
+      return parts.slice(0, 3).map(function (p) {
+        var v = DRUGS[p] || [];
+        var eff = v[0], ind = v[1];
+        var txt = eff || (ind ? "主治 " + ind : "");
+        return txt ? p + "：" + clip(txt, 24) : "";
+      }).filter(Boolean).join("；");
+    }
+    var hit = STMT2[flat(raw)];
+    if (hit) return "＝ " + hit.slice(0, 2).join("、") + " 的功效";
+    return "";
+  }
+
   /* ---------------- 本地存储 ---------------- */
   var KEY = "zyx.qb.v1";
   var store = { wrong: {}, fav: {}, stat: { seen: 0, right: 0 }, unit: {}, theme: null };
@@ -210,7 +246,7 @@
       + "题库整理自《中药学》单元练习表，已合并去重，共 " + DB.total + " 题。"
       + "题目文字可能存在个别录入误差，以教材为准。<br>"
       + "进度保存在本机浏览器，换设备或清理缓存会丢失。<br>"
-      + '<span style="opacity:.7">版本 v4 · 2026-11-11</span>'
+      + '<span style="opacity:.7">版本 v5 · 2026-11-11</span>'
       + "</div>";
 
     app.innerHTML = html;
@@ -387,9 +423,12 @@
       } else if (multi && s.pending.indexOf(L) >= 0) {
         st = "right";
       }
+      var note = answered ? optionNote(text) : "";
       h += '<button class="opt" data-act="pick" data-letter="' + L + '" data-state="' + st + '"' + (answered ? " disabled" : "") + ">"
         + '<span class="opt-letter">' + L + "</span>"
-        + "<span>" + esc(text) + "</span></button>";
+        + '<span class="opt-body"><span class="opt-text">' + esc(text) + "</span>"
+        + (note ? '<span class="opt-note">' + esc(note) + "</span>" : "")
+        + "</span></button>";
     });
     h += "</div>";
 
@@ -431,6 +470,23 @@
       opts[i].setAttribute("data-state",
         q.a.indexOf(L) >= 0 ? "right" : (chosen.indexOf(L) >= 0 ? "wrong" : "dim"));
       opts[i].disabled = true;
+      // 就地补上该选项对应的药物/功效注解
+      var body = opts[i].querySelector(".opt-body");
+      var text = opts[i].querySelector(".opt-text");
+      if (body && text) {
+        var note = optionNote(text.textContent);
+        var noteEl = body.querySelector(".opt-note");
+        if (note) {
+          if (!noteEl) {
+            noteEl = document.createElement("span");
+            noteEl.className = "opt-note";
+            body.appendChild(noteEl);
+          }
+          noteEl.textContent = note;
+        } else if (noteEl) {
+          noteEl.parentNode.removeChild(noteEl);
+        }
+      }
     }
     var fb = document.getElementById("fb");
     if (fb) {
@@ -575,8 +631,12 @@
     q.o.forEach(function (text, idx) {
       var L = String.fromCharCode(65 + idx);
       var isAns = q.a.indexOf(L) >= 0;
+      var note = optionNote(text);
       h += '<div class="opt" data-state="' + (isAns ? "right" : "dim") + '">'
-        + '<span class="opt-letter">' + L + "</span><span>" + esc(text) + "</span></div>";
+        + '<span class="opt-letter">' + L + "</span>"
+        + '<span class="opt-body"><span class="opt-text">' + esc(text) + "</span>"
+        + (note ? '<span class="opt-note">' + esc(note) + "</span>" : "")
+        + "</span></div>";
     });
     h += "</div>";
     h += '<div class="feedback">正确答案：<b>' + esc(choseText(q, q.a)) + "</b></div>";

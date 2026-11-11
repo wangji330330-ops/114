@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """把「题目导入模板」Excel 表格合并成一站式题库数据。
 
 用法：
@@ -14,6 +14,7 @@
 import argparse
 import collections
 import json
+import math
 import os
 import re
 import unicodedata
@@ -345,6 +346,90 @@ def clean_record(r):
     return r
 
 
+# ---------------- 药物知识挖掘 ----------------
+# 题库没有解析字段，但「X的功效是」「具有Y功效的药物是」这类题的正确答案
+# 本身就构成了一份「药 -> 功效/主治」对照表，从数据里反推出来用于作答后的标注。
+DRUG_RX = r"[\u4e00-\u9fa5]{2,5}"
+TAIL_RX = re.compile(r"(?:具有|善于|善|能|既|可|尤|最|长于|均)$")
+RE_EFF = re.compile("^(" + DRUG_RX + r")(?:具有|善于|善|能|既|可|尤|最|长于|均)?的(?:功效|功用|功能|功效与主治|功效及主治)是")
+RE_IND = re.compile("^(" + DRUG_RX + r")(?:具有|善于|善|能|既|可|尤|最|长于|均)?的(?:主治|主治病证|主治证候|主治病症|临床应用|适应证|适应症)是")
+RE_TREAT = re.compile("^(" + DRUG_RX + r")长于治疗")
+RE_MOST = re.compile("^(" + DRUG_RX + r")(?:尤|最)善")
+RE_HAS = re.compile(r"^(?:均|都)?具有(.{2,40}?)(?:功效|作用)的药物(?:组)?是")
+RE_PICK = re.compile(r"^治疗(.{3,50}?)(?:者|的人)?(?:，|,)?(?:用药)?(?:应|宜|首|当|最|均|可)?(?:选用|首选|最佳)?(?:的)?药物(?:组)?是")
+BAD_NAMES = {"下列", "各项", "以下", "上述", "本药", "该药", "此药", "治疗", "患者",
+             "具有", "能够", "功能", "作用", "主治", "均", "都", "两", "一组"}
+NOT_DRUG = re.compile(r"(功效|作用|主治|药物|病证|证候|下列|各项|以下)")
+
+
+def _drug_tokens(s):
+    return [t for t in re.split(r"[、，,/／]|和|与", s) if t]
+
+
+def mine_drugs(questions):
+    freq = collections.Counter()
+    for q in questions:
+        for ch in q["q"] + "".join(q["o"]):
+            if "\u4e00" <= ch <= "\u9fa5":
+                freq[ch] += 1
+    total = sum(freq.values()) or 1
+
+    def readability(s):
+        chars = [c for c in s if "\u4e00" <= c <= "\u9fa5"]
+        if not chars:
+            return -99.0
+        return sum(math.log((freq[c] + 1) / total) for c in chars) / len(chars)
+
+    eff, ind = collections.defaultdict(list), collections.defaultdict(list)
+
+    def add(bucket, drug, stmt):
+        drug = TAIL_RX.sub("", drug.strip("·"))
+        if not (2 <= len(drug) <= 5) or drug in BAD_NAMES or NOT_DRUG.search(drug):
+            return
+        stmt = re.sub(r"\s+", "", stmt).strip("。．.")
+        stmt = re.sub(r"[，,]?用?药?$", "", stmt) if stmt.endswith("用药") else stmt
+        if 2 <= len(stmt) <= 40:
+            bucket[drug].append(stmt)
+
+    for q in questions:
+        stem = q["q"].strip()
+        ai = ord(q["a"][0]) - 65
+        if ai >= len(q["o"]):
+            continue
+        ans = q["o"][ai].strip()
+        if not ans or len(ans) > 50:
+            continue
+        for rx, bucket in ((RE_EFF, eff), (RE_IND, ind), (RE_TREAT, ind), (RE_MOST, ind)):
+            m = rx.match(stem)
+            if m:
+                add(bucket, m.group(1), ans)
+                break
+        m = RE_HAS.match(stem)
+        if m:
+            for t in _drug_tokens(ans):
+                add(eff, t, m.group(1))
+            continue
+        m = RE_PICK.match(stem)
+        if m:
+            # 「治疗<证候>…的药物是」：答案为药名时，证候就是它的主治
+            for t in _drug_tokens(ans):
+                if len(t) <= 4 and not re.search(r"[配合加及或]", t):
+                    add(ind, t, m.group(1))
+
+    def best(lst):
+        if not lst:
+            return None
+        c = collections.Counter(lst)
+        return max(c.items(), key=lambda kv: (round(readability(kv[0]), 2), kv[1], len(kv[0])))[0]
+
+    drugs = {}
+    for d in set(eff) | set(ind):
+        e, i = best(eff.get(d, [])), best(ind.get(d, []))
+        if e or i:
+            drugs[d] = [e, i]
+    return dict(sorted(drugs.items()))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", required=True, help="Excel 题库所在目录")
@@ -376,7 +461,8 @@ def main():
     if cnt[0]:
         units.append({"id": 0, "name": UNIT_NAMES[0], "count": cnt[0], "desc": "跨章节混合题"})
 
-    data = {"version": 1, "total": len(questions), "units": units, "questions": questions}
+    data = {"version": 1, "total": len(questions), "units": units,
+            "questions": questions, "drugs": mine_drugs(questions)}
     js = "window.QB=" + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + ";"
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
