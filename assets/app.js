@@ -30,6 +30,17 @@
     }
   } catch (e) { /* 隐私模式忽略 */ }
 
+  /* 清理历史遗留的无效题目 id（如误存的「第 0 题」），避免计数虚高 */
+  (function prune() {
+    var dirty = false;
+    ["wrong", "fav"].forEach(function (k) {
+      Object.keys(store[k] || {}).forEach(function (id) {
+        if (!BY_ID[id]) { delete store[k][id]; dirty = true; }
+      });
+    });
+    if (dirty) { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {} }
+  })();
+
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {}
   }
@@ -168,7 +179,7 @@
     /* 快捷入口 */
     html += '<div class="tiles" style="margin-top:12px">';
     html += tile("错题本", String(wrongN), "wrong", "答错自动收录");
-    html += tile("收藏夹", String(favN), "fav", "随时回看");
+    html += tile("收藏夹", String(favN), "favList", "随时回看");
     html += tile("看进度", seen ? rate + "%" : "0%", "stat", "累计 " + seen + " 题");
     html += "</div>";
 
@@ -623,9 +634,14 @@
       var pool = poolOf([u]).map(function (q) { return q.id; });
       startSession(shuffle(pool), unitName(u)); return;
     }
-    if (act === "wrong") { state.view = "list"; state.listType = "wrong"; render(); window.scrollTo(0, 0); return; }
+    if (act === "wrong" || act === "favList") {
+      state.view = "list";
+      state.listType = act === "wrong" ? "wrong" : "fav";
+      render(); window.scrollTo(0, 0); return;
+    }
     if (act === "fav") {
       var fid = Number(el.getAttribute("data-id"));
+      if (!fid || !BY_ID[fid]) return;
       var wasFav = !!store.fav[fid];
       if (wasFav) delete store.fav[fid]; else store.fav[fid] = 1;
       save();
