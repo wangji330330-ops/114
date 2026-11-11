@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """把「题目导入模板」Excel 表格合并成一站式题库数据。
 
 用法：
@@ -366,6 +366,14 @@ def _drug_tokens(s):
     return [t for t in re.split(r"[、，,/／]|和|与", s) if t]
 
 
+# 题库里的错字/异体写法，统一到规范药名
+ALIAS = {"射千": "射干", "防已": "防己", "瓜萎": "瓜蒌", "川棟子": "川楝子",
+         "琋莶草": "豨莶草", "稀莶草": "豨莶草", "茎叶": "艾叶", "芬香化湿药": "",
+         "芳香化湿药": ""}
+# 明显不是药名的条目
+JUNK_RX = re.compile(r"(药$|药物|用$|生用|炒用|药组)")
+
+
 def mine_drugs(questions):
     freq = collections.Counter()
     for q in questions:
@@ -381,15 +389,22 @@ def mine_drugs(questions):
         return sum(math.log((freq[c] + 1) / total) for c in chars) / len(chars)
 
     eff, ind = collections.defaultdict(list), collections.defaultdict(list)
+    partial = collections.defaultdict(set)   # 来自「具有…功效的药物是」，只是部分功效
 
-    def add(bucket, drug, stmt):
+    def add(bucket, drug, stmt, from_has=False):
         drug = TAIL_RX.sub("", drug.strip("·"))
-        if not (2 <= len(drug) <= 5) or drug in BAD_NAMES or NOT_DRUG.search(drug):
+        drug = ALIAS.get(drug, drug)
+        if not drug or not (2 <= len(drug) <= 5) or drug in BAD_NAMES:
+            return
+        if NOT_DRUG.search(drug) or JUNK_RX.search(drug):
             return
         stmt = re.sub(r"\s+", "", stmt).strip("。．.")
-        stmt = re.sub(r"[，,]?用?药?$", "", stmt) if stmt.endswith("用药") else stmt
+        if stmt.endswith("用药"):
+            stmt = re.sub(r"[，,]?用药$", "", stmt)
         if 2 <= len(stmt) <= 40:
             bucket[drug].append(stmt)
+            if from_has and bucket is eff:
+                partial[drug].add(stmt)
 
     for q in questions:
         stem = q["q"].strip()
@@ -407,7 +422,7 @@ def mine_drugs(questions):
         m = RE_HAS.match(stem)
         if m:
             for t in _drug_tokens(ans):
-                add(eff, t, m.group(1))
+                add(eff, t, m.group(1), from_has=True)
             continue
         m = RE_PICK.match(stem)
         if m:
@@ -426,7 +441,8 @@ def mine_drugs(questions):
     for d in set(eff) | set(ind):
         e, i = best(eff.get(d, [])), best(ind.get(d, []))
         if e or i:
-            drugs[d] = [e, i]
+            # 第三位标记：功效是否只是「具有…功效的药物是」里的片段，前端会补「等」
+            drugs[d] = [e, i, 1 if (e and e in partial.get(d, ())) else 0]
     return dict(sorted(drugs.items()))
 
 
