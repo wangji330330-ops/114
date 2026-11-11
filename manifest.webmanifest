@@ -1,0 +1,14 @@
+{
+  "name": "中药学题库 · 在线练习",
+  "short_name": "中药学题库",
+  "description": "中药学选择题在线练习：按单元筛选、自动判分、错题本与收藏。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f1e8",
+  "theme_color": "#1f6b52",
+  "icons": [
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
