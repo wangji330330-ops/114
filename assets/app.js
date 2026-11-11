@@ -15,15 +15,19 @@
   var UNIT = {};
   DB.units.forEach(function (u) { UNIT[u.id] = u; });
 
-  /* ---------------- 药物小词典（由题库自身反推） ---------------- */
+  /* ---------------- 药物小词典（教材数据，题库兜底） ----------------
+     DB.drugs: { 药名: [功效串, 附加信息(性味归经 或 主治)] }
+     DB.alias: { 别名: 规范名 } */
   var DRUGS = DB.drugs || {};
-  var STMT2 = {};   // 功效原句（去标点） -> [药名]
+  var ALIAS = DB.alias || {};
+  var TOKEN2 = {};   // 单个功效词 -> [药名]，用于反查「这句功效是哪味药的」
   Object.keys(DRUGS).forEach(function (name) {
-    var list = DRUGS[name] || [];
-    var eff = list[0] || "";
-    if (!eff) return;
-    var k = flat(eff);
-    (STMT2[k] = STMT2[k] || []).push(name);
+    var eff = (DRUGS[name] || [])[0] || "";
+    eff.split(/[，,]/).forEach(function (tok) {
+      tok = tok.trim();
+      if (tok.length < 2) return;
+      (TOKEN2[tok] = TOKEN2[tok] || []).push(name);
+    });
   });
 
   function flat(s) {
@@ -33,61 +37,96 @@
     s = String(s || "");
     return s.length > n ? s.slice(0, n) + "…" : s;
   }
-  /* 选项注解：
-     - 药名 -> 该药的功效/主治（从「具有…功效」推来的片段加「等」，不把话说满）
-     - 功效原句 -> 这是哪味药的功效；多味药共有则写成「共同功效」
-     - 同一题里两味药功效完全相同 -> 互标「易混」 */
-  function drugEntry(name) {
-    return DRUGS[name] ? name : "";
+  function canon(name) {
+    if (DRUGS[name]) return name;
+    var c = ALIAS[name];
+    return c && DRUGS[c] ? c : "";
   }
-  function drugLine(name, limit, withInd) {
-    var v = DRUGS[name] || [];
-    var eff = v[0], ind = v[1];
-    if (!eff && !ind) return "";
-    var seg = [];
-    if (eff) {
-      var e = clip(eff, limit || 24);
-      if (v[2] && e.indexOf("…") < 0) e += " 等";
-      seg.push(e);
+  function drugNote(label, key, limit) {
+    var v = DRUGS[key] || [];
+    return {
+      eff: label + "：" + clip(v[0] || "", limit || 26),
+      prop: v[1] || "",
+      key: flat(v[0] || "")
+    };
+  }
+  /* 选项是一句功效时，反查是哪味药的功效；只认功效词完全一致的，不做近似 */
+  function reverseNote(text) {
+    var tokens = String(text || "").split(/[，,、；;]/).map(function (t) { return t.trim(); })
+      .filter(function (t) { return t.length >= 2; });
+    if (!tokens.length) return "";
+    var cand = null;
+    for (var i = 0; i < tokens.length; i++) {
+      var list = TOKEN2[tokens[i]];
+      if (!list) return "";
+      cand = cand ? cand.filter(function (n) { return list.indexOf(n) >= 0; }) : list.slice();
+      if (!cand.length) return "";
     }
-    if (ind && (withInd || !eff)) seg.push("主治 " + clip(ind, 18));
-    return name + "：" + seg.join("；");
+    var want = tokens.slice().sort().join("|");
+    cand = cand.filter(function (n) {
+      var eff = (DRUGS[n] || [])[0] || "";
+      return eff.split(/[，,]/).map(function (s) { return s.trim(); }).filter(Boolean).sort().join("|") === want;
+    });
+    if (!cand.length) return "";
+    if (cand.length === 1) return "＝ " + cand[0] + " 的功效";
+    if (cand.length <= 3) return "＝ " + cand.join("、") + " 的共同功效";
+    return "＝ " + cand.slice(0, 2).join("、") + " 等 " + cand.length + " 味药共有的功效";
   }
+  /* 选项注解：药名 -> 功效 + 性味归经；功效原句 -> 哪味药的功效；同题功效相同 -> 标「易混」 */
   function notesFor(q) {
-    var notes = [], keys = [];
-    // 题干问的是「治疗/主治」时，把主治也带出来，便于区分同类药
-    var wantsInd = /治疗|主治|病证|善治|首选|宜用|适用于|用于/.test(q.q || "");
+    var notes = [];
     q.o.forEach(function (text) {
       var raw = String(text == null ? "" : text).trim();
-      var name = drugEntry(raw);
-      if (name) {
-        notes.push(drugLine(name, 24, wantsInd));
-        keys.push(flat((DRUGS[name] || [])[0] || (DRUGS[name] || [])[1] || ""));
-        return;
-      }
-      // 药组：只标注认识的药，不因为缺一味就整条放弃
+      var one = canon(raw);
+      if (one) { notes.push(drugNote(raw, one)); return; }
+      // 药组：只标注认得的药，不因为缺一味就整条放弃
       var parts = raw.split(/[、，,/／]|和|与/).map(function (s) { return s.trim(); }).filter(Boolean);
-      var known = parts.filter(function (p) { return DRUGS[p]; });
+      var known = parts.filter(function (p) { return canon(p); });
       if (parts.length > 1 && known.length) {
-        var limit = known.length >= 3 ? 12 : (known.length === 2 ? 16 : 24);
-        notes.push(known.slice(0, 3).map(function (p) { return drugLine(p, limit, false); }).filter(Boolean).join("；"));
-        keys.push("");
+        var limit = known.length >= 3 ? 12 : (known.length === 2 ? 16 : 26);
+        notes.push({
+          eff: known.slice(0, 3).map(function (p) {
+            return p + "：" + clip((DRUGS[canon(p)] || [""])[0] || "", limit);
+          }).join("；"),
+          prop: "", key: ""
+        });
         return;
       }
-      var hit = STMT2[flat(raw)];
-      notes.push(hit ? "＝ " + hit.slice(0, 3).join("、") + (hit.length > 1 ? " 的共同功效" : " 的功效") : "");
-      keys.push("");
+      var rev = reverseNote(raw);
+      notes.push(rev ? { eff: rev, prop: "", key: "" } : null);
     });
-    // 易混提示：同题中两个选项功效完全相同
+    // 易混：同一题里两个选项的功效完全一样
     for (var i = 0; i < notes.length; i++) {
-      if (!notes[i] || !keys[i]) continue;
+      if (!notes[i] || !notes[i].key) continue;
       for (var j = 0; j < notes.length; j++) {
-        if (i === j || keys[j] !== keys[i]) continue;
-        var other = drugEntry(String(q.o[j]).trim());
-        if (other) { notes[i] += "（与" + other + "易混）"; break; }
+        if (i === j || !notes[j] || notes[j].key !== notes[i].key) continue;
+        notes[i].eff += "（与" + String(q.o[j]).trim() + "易混）";
+        break;
       }
     }
     return notes;
+  }
+
+  /* 把注解拼成两行：功效 + 性味归经 */
+  function noteHtml(n) {
+    if (!n || !n.eff) return "";
+    return '<span class="opt-note"><span class="note-eff">' + esc(n.eff) + "</span>"
+      + (n.prop ? '<span class="note-prop">' + esc(n.prop) + "</span>" : "") + "</span>";
+  }
+  function noteNode(n) {
+    var wrap = document.createElement("span");
+    wrap.className = "opt-note";
+    var a = document.createElement("span");
+    a.className = "note-eff";
+    a.textContent = n.eff;
+    wrap.appendChild(a);
+    if (n.prop) {
+      var b = document.createElement("span");
+      b.className = "note-prop";
+      b.textContent = n.prop;
+      wrap.appendChild(b);
+    }
+    return wrap;
   }
 
   /* ---------------- 本地存储 ---------------- */
@@ -318,10 +357,10 @@
     html += "</div>";
 
     html += '<div class="foot">'
-      + "题库整理自《中药学》单元练习表，已合并去重，共 " + DB.total + " 题。"
+      + "题库整理自《中药学》单元练习表，已合并去重，共 " + DB.total + " 题。选项注解用教材药物数据（功效/性味/归经）标注。"
       + "题目文字可能存在个别录入误差，以教材为准。<br>"
       + "进度保存在本机浏览器，换设备或清理缓存会丢失。<br>"
-      + '<span style="opacity:.7">版本 v7 · 2026-11-11</span>'
+      + '<span style="opacity:.7">版本 v8 · 2026-11-11</span>'
       + "</div>";
 
     app.innerHTML = html;
@@ -499,11 +538,11 @@
       } else if (multi && s.pending.indexOf(L) >= 0) {
         st = "right";
       }
-      var note = notes[idx] || "";
+      var noteHtmlStr = noteHtml(notes[idx]);
       h += '<button class="opt" data-act="pick" data-letter="' + L + '" data-state="' + st + '"' + (answered ? " disabled" : "") + ">"
         + '<span class="opt-letter">' + L + "</span>"
         + '<span class="opt-body"><span class="opt-text">' + esc(text) + "</span>"
-        + (note ? '<span class="opt-note">' + esc(note) + "</span>" : "")
+        + noteHtmlStr
         + "</span></button>";
     });
     h += "</div>";
@@ -550,18 +589,10 @@
       // 就地补上该选项对应的药物/功效注解
       var body = opts[i].querySelector(".opt-body");
       if (body) {
-        var note = notes[i] || "";
-        var noteEl = body.querySelector(".opt-note");
-        if (note) {
-          if (!noteEl) {
-            noteEl = document.createElement("span");
-            noteEl.className = "opt-note";
-            body.appendChild(noteEl);
-          }
-          noteEl.textContent = note;
-        } else if (noteEl) {
-          noteEl.parentNode.removeChild(noteEl);
-        }
+        var old = body.querySelector(".opt-note");
+        if (old) old.parentNode.removeChild(old);
+        var n = notes[i];
+        if (n && n.eff) body.appendChild(noteNode(n));
       }
     }
     var fb = document.getElementById("fb");
@@ -708,11 +739,11 @@
     q.o.forEach(function (text, idx) {
       var L = String.fromCharCode(65 + idx);
       var isAns = q.a.indexOf(L) >= 0;
-      var note = detailNotes[idx] || "";
+      var noteHtmlStr = noteHtml(detailNotes[idx]);
       h += '<div class="opt" data-state="' + (isAns ? "right" : "dim") + '">'
         + '<span class="opt-letter">' + L + "</span>"
         + '<span class="opt-body"><span class="opt-text">' + esc(text) + "</span>"
-        + (note ? '<span class="opt-note">' + esc(note) + "</span>" : "")
+        + noteHtmlStr
         + "</span></div>";
     });
     h += "</div>";

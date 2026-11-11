@@ -37,26 +37,32 @@
 
 ### 选项注解从哪来
 
-题库本身没有「解析」字段，所以注解是**从题库自身反推**的，没有引入外部生成的医学内容：
+作答后每个选项下面会显示该药的两行信息：
 
-- 「X的功效是（）」「X的主治病证是（）」的正确答案 → 药名 → 功效 / 主治
-- 「具有 A、B 功效的药物是（）」的正确答案 → 药名 → A、B
-- 「治疗 <证候> …的药物是（）」的正确答案 → 药名 → 该证候
+- **功效**：`石膏：清热泻火，除烦止渴，敛疮生肌，收湿止血`
+- **性味归经**：`甘、辛，大寒 · 归肺、胃经`
 
-最终得到 254 味药的对照表，覆盖约 60% 的选项、80% 的题目；覆盖不到的选项不显示注解，宁缺勿错。
+数据来自 `assets/herbs.json`（470 味药的教材口径数据，含性味、归经、功效、分类、别名），构建时与题库交叉：
 
-由于是从题目文本里抽出来的，个别药名下的功效可能只截取了片段（例如某题只提到「补火助阳」就只记这一条）。这类数据适合做「回忆提示」，不能替代教材。
+1. 药名能对上 → 直接用教材条目；
+2. 对不上（药组、冷门药）→ 用题库答案反推的说法兜底；
+3. 选项本身是一句功效（如「发汗解表，宣肺平喘，利水消肿」）→ 反查这是哪味药的功效，只认功效词完全一致的，避免误判；
+4. 同一题里两个选项功效完全一样 → 互标「（与 X 易混）」；
+5. 查不到的选项就不显示注解，宁缺勿错。
+
+已知局限：教材条目覆盖约 56% 的选项；题库与教材个别表述不一致时以教材为准，但题目自身的答案仍按原题库保留。
 
 ## 目录结构
 
 ```
 index.html              单页应用入口
-assets/data.js          题库数据 + 药物小词典（window.QB，约 333 KB）
+assets/data.js          题库数据 + 药物词条（window.QB，约 372 KB）
 assets/app.js           交互逻辑（无框架、无依赖）
 assets/style.css        样式
 assets/icon.svg         图标
 manifest.webmanifest    PWA 清单
-tools/build_data.py     Excel -> data.js 的生成脚本（含药物知识挖掘）
+assets/herbs.json       教材药物数据（470 味：性味/归经/功效/别名）
+tools/build_data.py     Excel -> data.js 的生成脚本
 ```
 
 ## 本地预览
@@ -72,7 +78,7 @@ python -m http.server 8000
 
 ```bash
 pip install xlrd openpyxl        # .xls 需要 xlrd，.xlsx 需要 openpyxl
-python tools/build_data.py --src <Excel 所在目录> --out assets/data.js
+python tools/build_data.py --src <Excel 所在目录> --out assets/data.js --herbs assets/herbs.json
 ```
 
 脚本会按「第X单元」自动归属单元、补齐 B 型题的共用选项、按上述规则去重，并重新生成 `assets/data.js`。同一份输入重复运行结果完全一致。

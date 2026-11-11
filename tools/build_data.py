@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """把「题目导入模板」Excel 表格合并成一站式题库数据。
 
 用法：
@@ -357,6 +357,8 @@ RE_TREAT = re.compile("^(" + DRUG_RX + r")长于治疗")
 RE_MOST = re.compile("^(" + DRUG_RX + r")(?:尤|最)善")
 RE_HAS = re.compile(r"^(?:均|都)?具有(.{2,40}?)(?:功效|作用)的药物(?:组)?是")
 RE_PICK = re.compile(r"^治疗(.{3,50}?)(?:者|的人)?(?:，|,)?(?:用药)?(?:应|宜|首|当|最|均|可)?(?:选用|首选|最佳)?(?:的)?药物(?:组)?是")
+# 「既能 A，又能 B 的药物是」——题干里直接写了功效
+RE_ABILITY = re.compile(r"^(?:既)?能(.{2,50}?)的?药物(?:组)?是")
 BAD_NAMES = {"下列", "各项", "以下", "上述", "本药", "该药", "此药", "治疗", "患者",
              "具有", "能够", "功能", "作用", "主治", "均", "都", "两", "一组"}
 NOT_DRUG = re.compile(r"(功效|作用|主治|药物|病证|证候|下列|各项|以下)")
@@ -430,6 +432,16 @@ def mine_drugs(questions):
             for t in _drug_tokens(ans):
                 if len(t) <= 4 and not re.search(r"[配合加及或]", t):
                     add(ind, t, m.group(1))
+            continue
+        m = RE_ABILITY.match(stem)
+        if m:
+            # 「既能 A，又能 B 的药物是」：题干本身就把功效写出来了
+            phrase = m.group(1)
+            phrase = re.sub(r"(，|,)?(又|也|并且|而且)?能(够)?", "，", phrase)
+            phrase = re.sub(r"^(，|,)+|(，|,)+$", "", phrase)
+            for t in _drug_tokens(ans):
+                if len(t) <= 4 and not re.search(r"[配合加及或]", t) and t not in BAD_NAMES:
+                    add(eff, t, phrase, from_has=True)
 
     def best(lst):
         if not lst:
@@ -437,19 +449,113 @@ def mine_drugs(questions):
         c = collections.Counter(lst)
         return max(c.items(), key=lambda kv: (round(readability(kv[0]), 2), kv[1], len(kv[0])))[0]
 
+    def merge_terms(lst, cap, from_has=None):
+        """把同一味药在题库里出现过的多条功效/主治合并：拆成功效词、近义去重后拼回去。"""
+        if not lst:
+            return None
+        from_has = from_has or set()
+
+        def rank(kv):
+            stmt, n = kv
+            # 完整的「X的功效是」优先，其次是片段；同源内按可读性、长度、出现次数
+            return (1 if stmt in from_has else 0, -round(readability(stmt), 2), -n, -len(stmt))
+
+        ordered = sorted(collections.Counter(lst).items(), key=rank)
+        seen, out = [], []
+        for stmt, _ in ordered:
+            for tok in re.split(r"[，,、；;]", stmt):
+                tok = tok.strip("。．. 　")
+                tok = re.sub(r"^(又|也|并且|而且|可|善|能|长于|善于|均|都)+", "", tok)
+                if len(tok) < 2:
+                    continue
+                # 近义去重：完全相同、被包含、或前 3 字相同（如 发汗解表/发汗解肌）视为重复
+                dup = False
+                for old in seen:
+                    if tok == old or tok in old or old in tok:
+                        dup = True
+                        break
+                    if len(tok) >= 4 and len(old) >= 4 and tok[:3] == old[:3]:
+                        dup = True
+                        break
+                if dup:
+                    continue
+                seen.append(tok)
+                out.append(tok)
+                if len(out) >= cap:
+                    return "，".join(out)
+        return "，".join(out) if out else None
+
     drugs = {}
     for d in set(eff) | set(ind):
-        e, i = best(eff.get(d, [])), best(ind.get(d, []))
+        e = merge_terms(eff.get(d, []), 5, partial.get(d, set()))
+        i = merge_terms(ind.get(d, []), 2)
         if e or i:
-            # 第三位标记：功效是否只是「具有…功效的药物是」里的片段，前端会补「等」
-            drugs[d] = [e, i, 1 if (e and e in partial.get(d, ())) else 0]
+            # 第三位标记：功效里含有「具有…功效的药物是」这类片段（可能不全），前端补「等」
+            has_full = any(s not in partial.get(d, set()) for s in eff.get(d, []))
+            drugs[d] = [e, i, 1 if (e and not has_full) else 0]
     return dict(sorted(drugs.items()))
+
+
+# ---------------- 教材药物数据：性味 / 归经 / 功效 ----------------
+# herbs.json 结构：{"herbs":[{"n":药名,"x":性味,"m":归经,"f":[功效...],"a":别名,"c":分类}]}
+# 输出统一成 drugs[药名] = [功效串, 附加信息]，前端直接渲染两行。
+HERB_ALIAS = {"紫苏": "紫苏叶", "苏叶": "紫苏叶", "龙胆草": "龙胆", "白芥子": "芥子",
+              "蚤休": "重楼", "七叶一枝花": "重楼", "川军": "大黄", "元参": "玄参",
+              "寸冬": "麦冬", "别甲": "鳖甲", "龟板": "龟甲", "双花": "金银花",
+              "二花": "金银花", "乌贼骨": "海螵蛸", "米仁": "薏苡仁", "薏米": "薏苡仁"}
+
+
+def load_herbs(path):
+    data = json.load(open(path, encoding="utf-8-sig"))
+    herbs, alias = {}, {}
+    for h in data.get("herbs", []):
+        name = (h.get("n") or "").strip()
+        eff = [(x or "").strip() for x in (h.get("f") or [])]
+        eff = [x for x in eff if x]
+        if not name or not eff:
+            continue
+        x = (h.get("x") or "").strip()
+        m = (h.get("m") or "").strip()
+        prop = ""
+        if x and m:
+            prop = x + " · 归" + m
+        elif x:
+            prop = x
+        elif m:
+            prop = "归" + m
+        herbs[name] = ["，".join(eff), prop]
+        for a in re.split(r"[、，,；;]", h.get("a") or ""):
+            a = a.strip()
+            if a and a != name and a not in herbs:
+                alias[a] = name
+    return herbs, alias
+
+
+def build_drugs(herbs, alias, bank):
+    """返回 (词条表, 别名表)。词条表只放规范名，别名单独一份，避免体积翻倍。"""
+    out = {}
+    for name, val in herbs.items():
+        out[name] = [val[0], val[1]]
+    amap = {}
+    for a, canon in list(alias.items()) + list(HERB_ALIAS.items()):
+        if canon in herbs and a != canon and a not in out:
+            amap[a] = canon
+    # 教材没有的（药组、冷门药），用题库反推的说法兜底
+    for name, val in bank.items():
+        if name in out or name in amap:
+            continue
+        eff, ind, _flag = (list(val) + [None, None, 0])[:3]
+        if not eff:
+            continue
+        out[name] = [eff, ("主治 " + ind) if ind else ""]
+    return dict(sorted(out.items())), dict(sorted(amap.items()))
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", required=True, help="Excel 题库所在目录")
     ap.add_argument("--out", default="assets/data.js", help="输出文件")
+    ap.add_argument("--herbs", default="", help="可选：教材药物数据 herbs.json（含性味、归经、功效）")
     args = ap.parse_args()
 
     raw, merged = build(args.src)
@@ -477,13 +583,18 @@ def main():
     if cnt[0]:
         units.append({"id": 0, "name": UNIT_NAMES[0], "count": cnt[0], "desc": "跨章节混合题"})
 
+    bank = mine_drugs(questions)          # 题库反推（兜底）
+    herbs, alias = (load_herbs(args.herbs) if args.herbs else ({}, {}))
+    drugs, amap = build_drugs(herbs, alias, bank)
+
     data = {"version": 1, "total": len(questions), "units": units,
-            "questions": questions, "drugs": mine_drugs(questions)}
+            "questions": questions, "drugs": drugs, "alias": amap}
     js = "window.QB=" + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + ";"
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(js)
-    print("源表 %d 个，原始行 %d，去重后 %d 题 -> %s" % (len(os.listdir(args.src)), len(raw), len(questions), args.out))
+    print("源表 %d 个，原始行 %d，去重后 %d 题；药物词条 %d（教材 %d + 题库兜底）-> %s"
+          % (len(os.listdir(args.src)), len(raw), len(questions), len(drugs), len(herbs), args.out))
 
 
 if __name__ == "__main__":

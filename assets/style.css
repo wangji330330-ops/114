@@ -290,9 +290,11 @@ html[data-theme="dark"] .badge.unit{background:#1b2c25}
 .opt-text{display:block}
 .opt-note{
   display:block;margin-top:4px;
-  font-size:11.8px;line-height:1.5;letter-spacing:.01em;
-  color:var(--ink-2);opacity:.9;
+  font-size:11.8px;line-height:1.55;letter-spacing:.01em;
+  color:var(--ink-2);
 }
+.note-eff{display:block}
+.note-prop{display:block;font-size:11px;color:var(--muted);margin-top:1px}
 .opt[data-state="right"] .opt-note{color:var(--brand)}
 .opt[data-state="wrong"] .opt-note{color:var(--ink-2)}
 .opt[data-state="dim"] .opt-note{opacity:1;color:var(--muted)}
